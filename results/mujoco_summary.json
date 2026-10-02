@@ -1,0 +1,465 @@
+{
+  "config": {
+    "cruise_alt_m": 8.0,
+    "tag_large_m": 0.42,
+    "tag_small_m": 0.12,
+    "pad_size_m": 1.5,
+    "control_hz": 100,
+    "camera_hz": 25.0,
+    "physics_hz": 500,
+    "max_tilt_deg": 25,
+    "gains": {
+      "kp": 0.2,
+      "ki": 0.03,
+      "kd": 0.35
+    }
+  },
+  "perception": {
+    "samples": 90,
+    "detected_pct": 86.7,
+    "mean_error_cm": 6.91,
+    "median_error_cm": 6.25,
+    "p95_error_cm": 14.83,
+    "large_tag_mean_cm": 8.17,
+    "small_tag_mean_cm": 4.78,
+    "geometry": {
+      "large_decodes_below_m": 8.73,
+      "small_decodes_below_m": 2.49,
+      "large_leaves_fov_below_m": 1.06,
+      "handover_window_m": [
+        1.06,
+        2.49
+      ],
+      "fov_halfwidth_at_cruise_m": 4.62,
+      "fov_halfwidth_at_touchdown_m": 0.115,
+      "decision_height_centred_m": 0.25,
+      "decision_height_at_tol_m": 0.388,
+      "visible_offset_at_final_alt_m": 0.116
+    }
+  },
+  "static": {
+    "key_points": {
+      "A": [
+        -1.738,
+        14.5306,
+        7.604
+      ],
+      "B": [
+        0.1823,
+        0.1109,
+        7.991
+      ],
+      "C": [
+        0.0835,
+        0.0116,
+        4.857
+      ],
+      "D": [
+        -0.0037,
+        -0.0053,
+        0.448
+      ]
+    },
+    "result": {
+      "outcome": "LANDED",
+      "pad_id": 4,
+      "address": "B-04  Clinic entrance",
+      "moving": false,
+      "time_s": 27.12,
+      "error_m": 0.006537018000050656,
+      "error_x": -0.005719487460819295,
+      "error_y": -0.0031654490232062072,
+      "touchdown_vz": -0.10347861769042403,
+      "detect_rate": 0.7289088863892014,
+      "handover": true
+    }
+  },
+  "dynamic": {
+    "offset_band_m": [
+      -0.324,
+      0.136
+    ],
+    "result": {
+      "outcome": "LANDED",
+      "pad_id": 3,
+      "address": "B-03  Courier van",
+      "moving": true,
+      "time_s": 37.77,
+      "error_m": 0.0350016419398583,
+      "error_x": 0.00797919482572329,
+      "error_y": 0.03408001450145229,
+      "touchdown_vz": 0.012805555274144995,
+      "detect_rate": 0.7284623773173392,
+      "handover": true
+    }
+  },
+  "monte_carlo": {
+    "missions": 40,
+    "landed": 40,
+    "success_rate": 100.0,
+    "mean_error_cm": 2.88,
+    "median_error_cm": 1.41,
+    "p95_error_cm": 10.61,
+    "max_error_cm": 12.98,
+    "static_mean_cm": 1.2,
+    "moving_mean_cm": 6.82,
+    "mean_time_s": 32.7,
+    "mean_touchdown_vz": 0.156,
+    "per_address": {
+      "1": {
+        "address": "A-01  Street drop point",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.07,
+        "mean_time_s": 31.9
+      },
+      "2": {
+        "address": "A-02  Loading bay",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.51,
+        "mean_time_s": 30.3
+      },
+      "3": {
+        "address": "B-03  Courier van",
+        "moving": true,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 5.22,
+        "mean_time_s": 30.2
+      },
+      "4": {
+        "address": "B-04  Clinic entrance",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 0.6,
+        "mean_time_s": 28.1
+      },
+      "5": {
+        "address": "C-05  Service rover",
+        "moving": true,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 10.73,
+        "mean_time_s": 29.9
+      },
+      "6": {
+        "address": "C-06  Apartment roof, 2F",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.3,
+        "mean_time_s": 32.4
+      },
+      "7": {
+        "address": "D-07  Utility cart",
+        "moving": true,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 4.5,
+        "mean_time_s": 31.0
+      },
+      "8": {
+        "address": "D-08  Apartment roof, 3F",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.54,
+        "mean_time_s": 37.8
+      },
+      "9": {
+        "address": "E-09  Tower roof, 5F",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.24,
+        "mean_time_s": 40.9
+      },
+      "10": {
+        "address": "E-10  Kerbside locker",
+        "moving": false,
+        "landed": 4,
+        "runs": 4,
+        "mean_error_cm": 1.13,
+        "mean_time_s": 34.4
+      }
+    }
+  },
+  "addressing": {
+    "samples": 60,
+    "mean_pads_in_frame": 1.5,
+    "max_pads_in_frame": 3,
+    "frames_with_multiple_pads_pct": 46.7,
+    "filtered_always_single_pad": true,
+    "distinct_tag_ids_seen": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7,
+      10
+    ]
+  },
+  "ablation": {
+    "trace": [
+      {
+        "config": "paper PID only",
+        "outcome": "ABORTED",
+        "error_m": 1.799,
+        "time_s": 180.01
+      },
+      {
+        "config": "+ integral anti-windup",
+        "outcome": "ABORTED",
+        "error_m": 1.812,
+        "time_s": 180.01
+      },
+      {
+        "config": "+ pad-velocity feed-forward",
+        "outcome": "LANDED",
+        "error_m": 0.067,
+        "time_s": 38.01
+      },
+      {
+        "config": "+ altitude gain scheduling",
+        "outcome": "LANDED",
+        "error_m": 0.061,
+        "time_s": 32.0
+      }
+    ],
+    "sweep": [
+      {
+        "config": "paper PID only",
+        "runs": 6,
+        "landed": 0,
+        "mean_error_m": null,
+        "mean_time_s": null
+      },
+      {
+        "config": "+ integral anti-windup",
+        "runs": 6,
+        "landed": 0,
+        "mean_error_m": null,
+        "mean_time_s": null
+      },
+      {
+        "config": "+ pad-velocity feed-forward",
+        "runs": 6,
+        "landed": 4,
+        "mean_error_m": 0.09,
+        "mean_time_s": 30.9
+      },
+      {
+        "config": "+ altitude gain scheduling",
+        "runs": 6,
+        "landed": 6,
+        "mean_error_m": 0.065,
+        "mean_time_s": 30.1
+      }
+    ],
+    "static_sweep": [
+      {
+        "config": "paper PID only",
+        "runs": 6,
+        "landed": 6,
+        "mean_error_m": 0.125,
+        "mean_time_s": 33.3
+      },
+      {
+        "config": "+ integral anti-windup",
+        "runs": 6,
+        "landed": 6,
+        "mean_error_m": 0.019,
+        "mean_time_s": 31.7
+      },
+      {
+        "config": "+ pad-velocity feed-forward",
+        "runs": 6,
+        "landed": 6,
+        "mean_error_m": 0.018,
+        "mean_time_s": 31.3
+      },
+      {
+        "config": "+ altitude gain scheduling",
+        "runs": 6,
+        "landed": 6,
+        "mean_error_m": 0.012,
+        "mean_time_s": 31.3
+      }
+    ]
+  },
+  "divert": {
+    "missions": 20,
+    "landed": 20,
+    "mean_error_cm": 2.98,
+    "p95_error_cm": 11.07,
+    "max_error_cm": 11.52,
+    "go_arounds": 0,
+    "runs": [
+      {
+        "pad_id": 1,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0047,
+        "time_s": 15.8,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 1,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0143,
+        "time_s": 34.91,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 2,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0159,
+        "time_s": 28.49,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 2,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0131,
+        "time_s": 34.9,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 3,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0087,
+        "time_s": 23.46,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 3,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0583,
+        "time_s": 32.94,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 4,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0117,
+        "time_s": 17.71,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 4,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0124,
+        "time_s": 16.62,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 5,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.1105,
+        "time_s": 27.93,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 5,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.1152,
+        "time_s": 36.84,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 6,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0162,
+        "time_s": 31.27,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 6,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0117,
+        "time_s": 31.66,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 7,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0436,
+        "time_s": 24.16,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 7,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0637,
+        "time_s": 30.26,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 8,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0193,
+        "time_s": 34.1,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 8,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0167,
+        "time_s": 34.97,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 9,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0202,
+        "time_s": 34.29,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 9,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.013,
+        "time_s": 37.08,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 10,
+        "scenario": "divert in flight",
+        "outcome": "LANDED",
+        "error_m": 0.0119,
+        "time_s": 32.21,
+        "go_arounds": 0
+      },
+      {
+        "pad_id": 10,
+        "scenario": "divert after landing",
+        "outcome": "LANDED",
+        "error_m": 0.0146,
+        "time_s": 31.1,
+        "go_arounds": 0
+      }
+    ]
+  }
+}
