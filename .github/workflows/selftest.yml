@@ -1,0 +1,25 @@
+name: selftest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Loads the MuJoCo world, renders the onboard camera headlessly and checks the
+# AprilTag detector decodes a pad, then flies one full static landing.
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    env:
+      MUJOCO_GL: osmesa
+      PYOPENGL_PLATFORM: osmesa
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libosmesa6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install mujoco pupil-apriltags opencv-python-headless numpy matplotlib
+      - run: python drone_sim/selftest.py
+      - run: python drone_sim/evaluate.py --only static
