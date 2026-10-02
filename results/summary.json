@@ -1,0 +1,201 @@
+{
+  "arena_fig": "figures/prototype/fig1_arena.png",
+  "static": {
+    "key_points": {
+      "A": [
+        4.414,
+        -2.2043,
+        5.7558
+      ],
+      "B": [
+        0.167,
+        -0.1987,
+        6.0
+      ],
+      "C": [
+        0.0556,
+        -0.0027,
+        1.1838
+      ],
+      "D": [
+        -0.0219,
+        0.0573,
+        0.3409
+      ]
+    },
+    "result": {
+      "outcome": "LANDED",
+      "tag_id": 5,
+      "address": "C-05  Hospital helipad",
+      "moving": false,
+      "time_s": 36.96000000000018,
+      "error_m": 0.08459354745320588,
+      "error_x": 0.055042956606184745,
+      "error_y": -0.0642366032629953,
+      "detect_rate": 0.7554112554112554
+    }
+  },
+  "dynamic": {
+    "offset_band_m": [
+      -0.35,
+      0.507
+    ],
+    "result": {
+      "outcome": "LANDED",
+      "tag_id": 4,
+      "address": "B-04  Delivery van (route N)",
+      "moving": true,
+      "time_s": 36.300000000000075,
+      "error_m": 0.035283645338282724,
+      "error_x": 0.02839210757358046,
+      "error_y": -0.020948122968131422,
+      "detect_rate": 0.6751101321585903
+    }
+  },
+  "step_response": {
+    "overshoot_no_pid_pct": 18.8,
+    "overshoot_pid_pct": 2.8
+  },
+  "ablation": {
+    "trace_address_6": [
+      {
+        "config": "paper PID only",
+        "outcome": "ABORTED",
+        "final_error_m": 2.749,
+        "time_s": 240.0,
+        "steady_offset_m": 2.537
+      },
+      {
+        "config": "+ pad-velocity feed-forward",
+        "outcome": "LANDED",
+        "final_error_m": 0.087,
+        "time_s": 23.2,
+        "steady_offset_m": 0.059
+      },
+      {
+        "config": "+ altitude gain scheduling",
+        "outcome": "LANDED",
+        "final_error_m": 0.059,
+        "time_s": 23.2,
+        "steady_offset_m": 0.047
+      }
+    ],
+    "all_moving_addresses": [
+      {
+        "config": "paper PID only",
+        "runs": 20,
+        "landed": 1,
+        "mean_error_m": 0.177,
+        "mean_time_s": 97.7
+      },
+      {
+        "config": "+ pad-velocity feed-forward",
+        "runs": 20,
+        "landed": 19,
+        "mean_error_m": 0.103,
+        "mean_time_s": 65.6
+      },
+      {
+        "config": "+ altitude gain scheduling",
+        "runs": 20,
+        "landed": 20,
+        "mean_error_m": 0.08,
+        "mean_time_s": 35.5
+      }
+    ]
+  },
+  "monte_carlo": {
+    "missions": 120,
+    "landed": 120,
+    "success_rate": 100.0,
+    "mean_error_m": 0.081,
+    "median_error_m": 0.084,
+    "p95_error_m": 0.125,
+    "max_error_m": 0.149,
+    "static_mean_m": 0.083,
+    "moving_mean_m": 0.079,
+    "mean_time_s": 38.5,
+    "per_address": {
+      "1": {
+        "address": "A-01  Block A rooftop pad",
+        "moving": false,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.079,
+        "mean_time_s": 41.3
+      },
+      "2": {
+        "address": "A-02  Block A loading bay",
+        "moving": true,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.091,
+        "mean_time_s": 41.4
+      },
+      "3": {
+        "address": "B-03  Warehouse gate 2",
+        "moving": false,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.086,
+        "mean_time_s": 39.3
+      },
+      "4": {
+        "address": "B-04  Delivery van (route N)",
+        "moving": true,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.046,
+        "mean_time_s": 38.7
+      },
+      "5": {
+        "address": "C-05  Hospital helipad",
+        "moving": false,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.082,
+        "mean_time_s": 37.3
+      },
+      "6": {
+        "address": "C-06  Patrol rover (loop)",
+        "moving": true,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.096,
+        "mean_time_s": 32.7
+      },
+      "7": {
+        "address": "D-07  Campus parcel locker",
+        "moving": false,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.085,
+        "mean_time_s": 41.4
+      },
+      "8": {
+        "address": "D-08  Service cart (aisle 3)",
+        "moving": true,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.058,
+        "mean_time_s": 37.9
+      },
+      "9": {
+        "address": "E-09  Substation pad",
+        "moving": false,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.084,
+        "mean_time_s": 35.3
+      },
+      "10": {
+        "address": "E-10  Harbour tender (moving)",
+        "moving": true,
+        "landed": 12,
+        "runs": 12,
+        "mean_error_m": 0.106,
+        "mean_time_s": 39.2
+      }
+    }
+  }
+}
