@@ -1,0 +1,246 @@
+;; =====================================================================
+;;  Vision-guided autonomous landing on addressed AirTag targets
+;;  NetLogo implementation of the methodology in ../drone_sim
+;;
+;;  Base paper: Zhou Li, Yang Chen, Hao Lu, Huaiyu Wu, Lei Cheng,
+;;  "UAV Autonomous Landing Technology Based on AprilTags Vision
+;;  Positioning Algorithm", 38th Chinese Control Conference, 2019.
+;;
+;;  Same methodology as the Python/MuJoCo build, on a second platform:
+;;    * ten addressed pads - street, vehicle decks, apartment roofs
+;;    * a dual-scale marker, large tag offset from the pad centre
+;;    * radio (AirTag) guidance until the addressed tag is decoded, then
+;;      vision guidance, with authority passing exactly once
+;;    * eq. (9) PID at the paper's published gains, plus the five
+;;      changes this project adds
+;;    * QUATERNION attitude control - no Euler angle anywhere in the
+;;      control path
+;;    * a decision height derived from the marker geometry
+;;
+;;  What differs, and why it is honest: NetLogo renders no camera, so
+;;  the DETECTOR is modelled rather than run. A tag is decodable when
+;;  its apparent edge exceeds MIN-TAG-PX and its quiet zone lies inside
+;;  the field of view - the same two inequalities the Python build
+;;  asserts in config.check_geometry() - and the measurement noise is
+;;  calibrated to the error that build measures against ground truth
+;;  (7.15 cm mean over 90 random poses). Everything downstream of the
+;;  measurement is the same algorithm, line for line.
+;; =====================================================================
+
+breed [uavs uav]
+breed [pads pad]
+breed [fovs fov]
+breed [captions caption]
+
+globals [
+  ;; ---- timing -------------------------------------------------------
+  DT CAM-EVERY cam-count sim-t mission-t
+  ;; ---- airframe (DJI Matrice 100 class) -----------------------------
+  MASS GRAV HOVER-THRUST MAX-THRUST MAX-TILT JX JY JZ
+  ;; ---- camera and markers -------------------------------------------
+  IMG-W IMG-H FOCAL-PX CAM-DROP MIN-TAG-PX QUIET-ZONE
+  TAG-LARGE TAG-SMALL TAG-LARGE-OFFSET PAD-SIZE
+  VIS-SIGMA-A VIS-SIGMA-B
+  ;; ---- guidance: eq. (9) and the five changes -----------------------
+  KP KI KD I-CLAMP I-BAND D-FILT-TAU I-LEAK-TAU
+  GAIN-LOW GAIN-HI-ALT GAIN-LO-ALT
+  AB-ALPHA AB-BETA AB-GAMMA LEAD-TIME
+  OMEGA-MAX OMEGA-TAU OMEGA-PERP-MIN OMEGA-MIN-SPEED
+  ;; ---- inner loops --------------------------------------------------
+  KP-VEL KI-VEL VI-CLAMP KP-VZ KP-ATT KD-RATE KP-YAW KD-YAW VSP-FILT-TAU
+  ;; ---- flight envelope ----------------------------------------------
+  CRUISE-ALT V-MAX-CRUISE V-MAX-TRACK V-MAX-VERT
+  ;; ---- mission gates ------------------------------------------------
+  ALIGN-TOL ALIGN-HOLD CONE-SLOPE DESCEND-ABORT FINAL-ALT FINAL-SINK
+  FINAL-TOL FINAL-TOL-K FINAL-TOL-MAX LOST-TIMEOUT COMMIT-HOLD
+  MAX-GO-AROUNDS MAX-MISSION-TIME
+  ;; ---- beacon -------------------------------------------------------
+  BEACON-SIGMA BEACON-RANGE beacon-clock last-fix-x last-fix-y have-fix?
+  ;; ---- wind ---------------------------------------------------------
+  WIND-MEAN-X WIND-MEAN-Y WIND-SIGMA WIND-TAU DRAG-COEF wind-x wind-y
+  ;; ---- mission ------------------------------------------------------
+  target-id mission-state go-arounds armed? cruise-target
+  aligned-for since-vision held-x held-y have-held? switched? live? fresh?
+  search-t result-text
+  ;; ---- guidance state -----------------------------------------------
+  int-x int-y last-err-x last-err-y d-state-x d-state-y pid-started?
+  tp-x tp-y tv-x tv-y ta-x ta-y turn-w t-since have-track?
+  vi-x vi-y vsp-x vsp-y vsp-z vspf-x vspf-y vspf-z
+  ;; ---- the drone's own state ----------------------------------------
+  ;; Held in globals rather than in a turtle: every controller below
+  ;; reads and writes all of it every step, and threading that through
+  ;; "of" and "ask" in NetLogo buys nothing but places to make a context
+  ;; mistake. The turtle exists to be drawn.
+  dr-x dr-y dr-z dr-vx dr-vy dr-vz dr-q dr-wx dr-wy dr-wz dr-thrust
+  yaw-des head-filt
+  ;; ---- the rendered onboard camera panel -----------------------------
+  CAM-X0 CAM-X1 CAM-Y0 CAM-Y1 cam-patches
+  ;; ---- reporting ----------------------------------------------------
+  meas-off true-off tilt-deg marker-text fov-half
+]
+
+pads-own [ pad-id pad-kind deck mot home-x home-y spd hdg halfspan rad om
+           px py pvx pvy ]
+
+;; =====================================================================
+;;  QUATERNION ALGEBRA
+;;  q = [w x y z], unit norm, rotating BODY vectors into the WORLD frame
+;;  - the same convention as the Python build, and as MuJoCo.
+;;
+;;  The base paper composes R = Rz(a)Ry(t)Rx(b) and controls three Euler
+;;  angles separately. Nothing below ever forms an Euler angle: the
+;;  desired orientation is BUILT from the thrust direction, the error is
+;;  a quaternion product, and the torque is proportional to that error's
+;;  rotation vector. No singularity, no wrap, and the shortest arc comes
+;;  from the sign of a single dot product.
+;; =====================================================================
+
+to-report deg2rad [d] report d * pi / 180 end
+to-report rad2deg [r] report r * 180 / pi end
+to-report sin-r [r] report sin (rad2deg r) end
+to-report cos-r [r] report cos (rad2deg r) end
+
+to-report acos-r [d]
+  let c d
+  if c > 1 [ set c 1 ]
+  if c < -1 [ set c -1 ]
+  report deg2rad (acos c)
+end
+
+;; Standard atan2, in radians. NetLogo's own "atan x y" reports a
+;; HEADING: degrees clockwise from the positive y axis. Mixing the two
+;; conventions silently mirrors every rotation, so the conversion is
+;; done once, here, and nowhere else.
+to-report atan2-r [y x]
+  if x = 0 and y = 0 [ report 0 ]
+  let d 90 - (atan x y)
+  while [d > 180] [ set d d - 360 ]
+  while [d <= -180] [ set d d + 360 ]
+  report deg2rad d
+end
+
+to-report q-identity report (list 1 0 0 0) end
+
+to-report v-norm [v] report sqrt (sum (map [ a -> a * a ] v)) end
+
+to-report q-normalize [q]
+  let n v-norm q
+  if n < 1.0e-12 [ report q-identity ]
+  report map [ a -> a / n ] q
+end
+
+to-report q-conj [q]
+  report (list (item 0 q) (0 - item 1 q) (0 - item 2 q) (0 - item 3 q))
+end
+
+;; Hamilton product: the rotation b followed by the rotation a.
+to-report q-mul [a b]
+  let w1 item 0 a   let x1 item 1 a   let y1 item 2 a   let z1 item 3 a
+  let w2 item 0 b   let x2 item 1 b   let y2 item 2 b   let z2 item 3 b
+  report (list
+    (w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2)
+    (w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2)
+    (w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2)
+    (w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2))
+end
+
+;; Third column of the rotation matrix: the body z axis in world axes -
+;; the direction the rotors actually push along.
+to-report q-body-z [q]
+  let w item 0 q   let x item 1 q   let y item 2 q   let z item 3 q
+  report (list (2 * (x * z + w * y))
+               (2 * (y * z - w * x))
+               (1 - 2 * (x * x + y * y)))
+end
+
+to-report q-from-yaw [psi]
+  report (list (cos-r (psi / 2)) 0 0 (sin-r (psi / 2)))
+end
+
+to-report q-from-rotvec [v]
+  let a v-norm v
+  if a < 1.0e-12 [ report q-identity ]
+  let s (sin-r (a / 2)) / a
+  report (list (cos-r (a / 2))
+               ((item 0 v) * s) ((item 1 v) * s) ((item 2 v) * s))
+end
+
+;; Rotation vector (axis * angle) of q, taking the SHORT way round.
+;; This is the function the attitude controller is built on.
+to-report q-to-rotvec [q0]
+  let q q-normalize q0
+  if item 0 q < 0 [ set q map [ a -> 0 - a ] q ]
+  let v (list (item 1 q) (item 2 q) (item 3 q))
+  let s v-norm v
+  if s < 1.0e-9 [ report map [ a -> 2 * a ] v ]
+  let ang 2 * (atan2-r s (item 0 q))
+  report map [ a -> a * (ang / s) ] v
+end
+
+;; Spherical linear interpolation. A plain lerp fails twice: the result
+;; is not a unit quaternion, and because q and -q are the same rotation
+;; it can travel the long way round - interpolating 170 degrees to 190
+;; degrees through zero instead of through 180.
+to-report q-slerp [qa qb t]
+  let a q-normalize qa
+  let b q-normalize qb
+  let d (item 0 a) * (item 0 b) + (item 1 a) * (item 1 b) +
+        (item 2 a) * (item 2 b) + (item 3 a) * (item 3 b)
+  if d < 0 [ set b map [ z -> 0 - z ] b   set d 0 - d ]
+  if d > 0.9995 [
+    report q-normalize (map [ [p r] -> p + t * (r - p) ] a b) ]
+  let th acos-r d
+  let s sin-r th
+  report (map [ [p r] -> ((sin-r ((1 - t) * th)) * p +
+                          (sin-r (t * th)) * r) / s ] a b)
+end
+
+;; Build a quaternion from three orthonormal body axes, given as the
+;; columns b1 b2 b3. Shepperd's method: take the branch whose divisor is
+;; largest, so it is never ill-conditioned.
+to-report axes-to-q [b1 b2 b3]
+  let r00 item 0 b1   let r10 item 1 b1   let r20 item 2 b1
+  let r01 item 0 b2   let r11 item 1 b2   let r21 item 2 b2
+  let r02 item 0 b3   let r12 item 1 b3   let r22 item 2 b3
+  let tr r00 + r11 + r22
+  if tr > 0 [
+    let s 2 * sqrt (tr + 1)
+    report q-normalize (list (0.25 * s) ((r21 - r12) / s)
+                             ((r02 - r20) / s) ((r10 - r01) / s)) ]
+  if r00 > r11 and r00 > r22 [
+    let s 2 * sqrt (1 + r00 - r11 - r22)
+    report q-normalize (list ((r21 - r12) / s) (0.25 * s)
+                             ((r01 + r10) / s) ((r02 + r20) / s)) ]
+  if r11 > r22 [
+    let s 2 * sqrt (1 + r11 - r00 - r22)
+    report q-normalize (list ((r02 - r20) / s) ((r01 + r10) / s)
+                             (0.25 * s) ((r12 + r21) / s)) ]
+  let s 2 * sqrt (1 + r22 - r00 - r11)
+  report q-normalize (list ((r10 - r01) / s) ((r02 + r20) / s)
+                           ((r12 + r21) / s) (0.25 * s))
+end
+
+to-report v-cross [a b]
+  report (list ((item 1 a) * (item 2 b) - (item 2 a) * (item 1 b))
+               ((item 2 a) * (item 0 b) - (item 0 a) * (item 2 b))
+               ((item 0 a) * (item 1 b) - (item 1 a) * (item 0 b)))
+end
+
+to-report v-dot [a b]
+  report (item 0 a) * (item 0 b) + (item 1 a) * (item 1 b) +
+         (item 2 a) * (item 2 b)
+end
+
+to-report v-scale [v k] report map [ a -> a * k ] v end
+
+to-report v-unit [v]
+  let n v-norm v
+  if n < 1.0e-9 [ report (list 0 0 1) ]
+  report v-scale v (1 / n)
+end
+
+to-report clamp [x lo hi]
+  if x < lo [ report lo ]
+  if x > hi [ report hi ]
+  report x
+end

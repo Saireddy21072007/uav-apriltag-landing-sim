@@ -1,0 +1,193 @@
+;; =====================================================================
+;;  THE ONBOARD CAMERA, RENDERED
+;;
+;;  NetLogo has one view, so the right-hand strip of the world is given
+;;  over to the drone's camera and every patch in it is treated as a
+;;  PIXEL. For each one: turn the pixel into a ray in the camera frame,
+;;  rotate that ray into the world with the drone's actual attitude
+;;  quaternion, intersect it with the surface the pad sits on, and colour
+;;  the pixel by what is at the point it hits.
+;;
+;;  That is ray casting, and it is the same pinhole model the perception
+;;  code uses - f = (h/2)/tan(fovy/2), camera looking along -body z. So
+;;  the panel is not an illustration of what the drone sees. It is what
+;;  the drone sees.
+;;
+;;  Watch it on the descent. High up, both markers sit small in the
+;;  middle. Lower, the large marker slides to the edge and is cut off -
+;;  that is the hand-over to the small one. Lower still the small marker
+;;  outgrows the frame too, and the height at which that happens is the
+;;  decision height: vision has nothing left to give and the drone
+;;  commits on the solution it already holds.
+;; =====================================================================
+
+to setup-camera-panel
+  set cam-patches patches with [pxcor >= CAM-X0 and pxcor <= CAM-X1 and
+                               pycor >= CAM-Y0 and pycor <= CAM-Y1]
+  ask cam-patches [ set pcolor 2 ]
+  ;; a one-patch frame around the panel so it reads as a separate display
+  ask patches with [(pxcor >= CAM-X0 - 1) and (pxcor <= CAM-X1 + 1) and
+                    (pycor >= CAM-Y0 - 1) and (pycor <= CAM-Y1 + 1) and
+                    not (pxcor >= CAM-X0 and pxcor <= CAM-X1 and
+                         pycor >= CAM-Y0 and pycor <= CAM-Y1)] [ set pcolor 6 ]
+end
+
+;; First column of the rotation matrix: the body x axis, in world axes.
+to-report q-body-x [q]
+  let w item 0 q   let x item 1 q   let y item 2 q   let z item 3 q
+  report (list (1 - 2 * (y * y + z * z))
+               (2 * (x * y + w * z))
+               (2 * (x * z - w * y)))
+end
+
+;; Second column: the body y axis, in world axes.
+to-report q-body-y [q]
+  let w item 0 q   let x item 1 q   let y item 2 q   let z item 3 q
+  report (list (2 * (x * y - w * z))
+               (1 - 2 * (x * x + z * z))
+               (2 * (y * z + w * x)))
+end
+
+to render-camera
+  let p pad-with-id target-id
+  let deck-h [deck] of p
+  let padx [px] of p
+  let pady [py] of p
+  let pyaw 0
+  if pad-speed-of p > 0.05 [ set pyaw atan2-r ([pvy] of p) ([pvx] of p) ]
+  let cy cos-r pyaw
+  let sy sin-r pyaw
+
+  let bx-axis q-body-x dr-q
+  let by-axis q-body-y dr-q
+  let bz-axis q-body-z dr-q
+
+  ;; the camera hangs CAM-DROP below the body origin, along -body z
+  let camx dr-x - CAM-DROP * (item 0 bz-axis)
+  let camy dr-y - CAM-DROP * (item 1 bz-axis)
+  let camz dr-z - CAM-DROP * (item 2 bz-axis)
+
+  let span-x (CAM-X1 - CAM-X0)
+  let span-y (CAM-Y1 - CAM-Y0)
+  let half-w IMG-W / 2
+  let half-h IMG-H / 2
+
+  ask cam-patches [
+    ;; this pixel, in image coordinates
+    let u ((pxcor - CAM-X0) / span-x) * IMG-W
+    let v ((CAM-Y1 - pycor) / span-y) * IMG-H
+
+    ;; the ray it corresponds to, in the camera (body) frame. The camera
+    ;; looks along -body z, so the ray is (x, y, -1) scaled by 1/f.
+    let rx (u - half-w) / FOCAL-PX
+    let ry (0 - (v - half-h)) / FOCAL-PX
+
+    ;; rotate that ray into the world
+    let dx-w rx * (item 0 bx-axis) + ry * (item 0 by-axis) - (item 0 bz-axis)
+    let dy-w rx * (item 1 bx-axis) + ry * (item 1 by-axis) - (item 1 bz-axis)
+    let dz-w rx * (item 2 bx-axis) + ry * (item 2 by-axis) - (item 2 bz-axis)
+
+    ifelse dz-w > -0.02 [
+      set pcolor 103                      ;; ray points at the sky
+    ] [
+      ;; where it meets the plane the pad sits on
+      let t (deck-h - camz) / dz-w
+      ifelse t <= 0 [
+        set pcolor 103
+      ] [
+        let hx camx + t * dx-w
+        let hy camy + t * dy-w
+        ;; that point, in the pad's own frame
+        let ex hx - padx
+        let ey hy - pady
+        let lx ex * cy + ey * sy
+        let ly (0 - ex) * sy + ey * cy
+        set pcolor pixel-colour lx ly
+      ]
+    ]
+  ]
+
+  ;; Crosshair: where the camera is actually pointing. Addressed
+  ;; directly - asking every patch in the world whether it belongs to the
+  ;; panel is a membership test against a 256-patch agentset for each of
+  ;; the world's 1700 patches, twice a tick, and it brings the model to a
+  ;; halt.
+  let mx round ((CAM-X0 + CAM-X1) / 2)
+  let my round ((CAM-Y0 + CAM-Y1) / 2)
+  ask patch mx my       [ set pcolor 25 ]
+  ask patch (mx - 1) my [ set pcolor 25 ]
+  ask patch (mx + 1) my [ set pcolor 25 ]
+  ask patch mx (my - 1) [ set pcolor 25 ]
+  ask patch mx (my + 1) [ set pcolor 25 ]
+end
+
+;; What is painted at this point of the pad, in the pad's own frame?
+to-report pixel-colour [lx ly]
+  ;; the small marker, at the pad centre
+  if (abs lx <= TAG-SMALL / 2) and (abs ly <= TAG-SMALL / 2) [ report 0 ]
+  ;; the large marker, TAG-LARGE-OFFSET along the pad's +x axis
+  if (abs (lx - TAG-LARGE-OFFSET) <= TAG-LARGE / 2) and
+     (abs ly <= TAG-LARGE / 2) [ report 0 ]
+  ;; the pad itself, and its painted border
+  if (abs lx <= PAD-SIZE / 2) and (abs ly <= PAD-SIZE / 2) [
+    if (abs lx > PAD-SIZE / 2 - 0.09) or (abs ly > PAD-SIZE / 2 - 0.09) [
+      report 95 ]                          ;; blue deck edging
+    report 9.9 ]                           ;; white deck
+  report 35                                ;; the surface around it
+end
+
+;; A readable caption under the panel, drawn with a label-only turtle.
+to setup-camera-caption
+  create-captions 1 [
+    setxy ((CAM-X0 + CAM-X1) / 2) (CAM-Y0 - 2)
+    set shape "square"
+    set size 0.1
+    set color black
+    set label-color white
+    set label "onboard camera"
+  ]
+end
+
+to update-camera-caption
+  ask captions [
+    set label (word "camera  " (precision (dr-z - ([deck] of (pad-with-id target-id))) 2)
+                    " m above deck   -   " marker-text)
+  ]
+end
+
+
+;; ---------------------------------------------------------------------
+;;  Checking the camera without a display.
+;;
+;;  The panel is ray cast, so it can be verified by counting pixels: park
+;;  the drone squarely over a pad at a known height and ask how much of
+;;  the frame the markers and the pad fill. Those counts follow from the
+;;  pinhole geometry alone, so if they match what the lens equation says
+;;  they should be, the render is right.
+;; ---------------------------------------------------------------------
+to-report cam-dark   report count cam-patches with [pcolor = 0] end
+to-report cam-pad    report count cam-patches with [pcolor = 9.9] end
+to-report cam-total  report count cam-patches end
+
+to park-over-pad [i h]
+  set target-id i
+  let p pad-with-id i
+  set dr-x [px] of p
+  set dr-y [py] of p
+  set dr-z ([deck] of p) + h
+  set dr-q q-identity
+  set dr-vx 0  set dr-vy 0  set dr-vz 0
+  render-camera
+end
+
+;; Marker pixels and pad pixels against height above the deck. The marker
+;; must grow as the drone descends, and the pad must fill the frame
+;; before the drone touches down - that filling is the decision height.
+to-report camera-geometry-table
+  let out []
+  foreach (list 8 4 2 1 0.6 0.45 0.3 0.2) [ h ->
+    park-over-pad 4 h
+    set out lput (list (precision h 2) cam-dark cam-pad cam-total) out
+  ]
+  report out
+end

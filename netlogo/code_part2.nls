@@ -1,0 +1,332 @@
+;; =====================================================================
+;;  CONSTANTS - the single source of truth, mirroring ../drone_sim/config.py
+;;  Provenance: [PAPER] from Li et al. 2019, [DJI] Matrice 100 class,
+;;  [MODEL] this project's modelling choice.
+;; =====================================================================
+
+to setup-constants
+  ;; ---- timing. The Python build runs control at 100 Hz over 500 Hz
+  ;; physics; here one tick is one control step at 50 Hz, with the camera
+  ;; at 25 Hz as before. Halving the control rate changes nothing in the
+  ;; algorithm - every gain below is either rate-normalised or expressed
+  ;; as a time constant.
+  set DT 0.02
+  set CAM-EVERY 2
+
+  ;; ---- airframe [DJI]
+  set MASS 3.5
+  set GRAV 9.81
+  set HOVER-THRUST MASS * GRAV
+  set MAX-THRUST 2.2 * HOVER-THRUST
+  set MAX-TILT deg2rad 25
+  set JX 0.045   set JY 0.045   set JZ 0.080
+
+  ;; ---- camera
+  set IMG-W 640
+  set IMG-H 480
+  ;; MuJoCo defines the field of view over the image HEIGHT, so
+  ;; f = (h/2) / tan(fovy/2) with fovy = 60 degrees.
+  set FOCAL-PX (IMG-H / 2) / (tan 30)
+  set CAM-DROP 0.12
+  set MIN-TAG-PX 20
+  set QUIET-ZONE 1.25
+
+  ;; ---- markers [PAPER-style, with distinct ids per scale]
+  set TAG-LARGE 0.42
+  set TAG-SMALL 0.12
+  set TAG-LARGE-OFFSET 0.40
+  set PAD-SIZE 1.50
+
+  ;; ---- the modelled detector's error. Calibrated against the Python
+  ;; build, which measures its real detector against MuJoCo ground truth
+  ;; over 90 random poses: 7.15 cm mean, 9.02 cm on the large tag and
+  ;; 3.99 cm on the small one. Error grows with slant range because the
+  ;; same pixel of corner error subtends more ground further away.
+  set VIS-SIGMA-A 0.010
+  set VIS-SIGMA-B 0.011
+
+  ;; ---- guidance, eq. (9) at the paper's published gains [PAPER]
+  set KP 0.20
+  set KI 0.03
+  set KD 0.35
+  set I-CLAMP 1.2
+  set I-BAND 0.6
+  set D-FILT-TAU 0.12
+  set I-LEAK-TAU 0.6
+  set GAIN-LOW 3.0
+  set GAIN-HI-ALT 4.0
+  set GAIN-LO-ALT 0.6
+  set AB-ALPHA 0.35
+  set AB-BETA 0.08
+  set AB-GAMMA 0.010
+  set LEAD-TIME 0.25
+  set OMEGA-MAX 1.5
+  set OMEGA-TAU 0.35
+  set OMEGA-PERP-MIN 0.55
+  set OMEGA-MIN-SPEED 0.30
+
+  ;; ---- inner loops
+  set KP-VEL 1.6
+  set KI-VEL 1.2
+  set VI-CLAMP 0.6
+  set KP-VZ 2.4
+  set KP-ATT 13.0
+  set KD-RATE 2.2
+  set KP-YAW 3.0
+  set KD-YAW 1.2
+  set VSP-FILT-TAU 0.08
+
+  ;; ---- flight envelope
+  set CRUISE-ALT 8.0
+  set V-MAX-CRUISE 6.0
+  set V-MAX-TRACK 3.0
+  set V-MAX-VERT 1.4
+
+  ;; ---- mission gates
+  set ALIGN-TOL 0.45
+  set ALIGN-HOLD 0.7
+  set CONE-SLOPE 0.22
+  set DESCEND-ABORT 1.00
+  set FINAL-ALT 0.45
+  set FINAL-SINK 0.35
+  set FINAL-TOL 0.08
+  set FINAL-TOL-K 0.14
+  set FINAL-TOL-MAX 0.18
+  set LOST-TIMEOUT 1.2
+  set COMMIT-HOLD 0.20
+  set MAX-GO-AROUNDS 2
+  set MAX-MISSION-TIME 180
+
+  ;; ---- AirTag radio beacon
+  set BEACON-SIGMA 2.5
+  set BEACON-RANGE 60
+
+  ;; ---- the camera panel occupies the right-hand strip of the world
+  set CAM-X0 14   set CAM-X1 29
+  set CAM-Y0 -8   set CAM-Y1 7
+
+  ;; ---- wind
+  set WIND-MEAN-X 0.6
+  set WIND-MEAN-Y -0.4
+  set WIND-SIGMA 0.5
+  set WIND-TAU 1.5
+  set DRAG-COEF 0.28
+end
+
+;; Height of the surface a pad sits on. Everything downstream - the
+;; search altitude, the approach cone, the gain schedule, the commit
+;; height, the touchdown test - is measured against THIS and never
+;; against the street. Measured against absolute altitude instead, a
+;; rooftop approach keeps its cruise-altitude gains and its wide early
+;; cone all the way down to the parapet, arrives fast and off-centre,
+;; loses the marker under its own nose and climbs away - for ever.
+to-report deck-of [p] report [deck] of p end
+
+to-report commit-tolerance [pad-speed]
+  report min (list (FINAL-TOL + FINAL-TOL-K * abs pad-speed) FINAL-TOL-MAX)
+end
+
+;; =====================================================================
+;;  THE ADDRESS BOOK - the same ten addresses as the Python build
+;; =====================================================================
+
+to make-pads
+  make-pad  1 "ground"  -1.6   11.0 "static"  0 0 0 0 0 0
+  make-pad  2 "ground"   1.7    7.5 "static"  0 0 0 0 0 0
+  make-pad  3 "vehicle" -1.5    3.0 "line"    0.9 90  3.0 0 0 0
+  make-pad  4 "ground"   1.8    0.0 "static"  0 0 0 0 0 0
+  make-pad  5 "vehicle" -1.0   -3.5 "circle"  0 0 0 0.9 0.60 0
+  make-pad  6 "roof"     6.8   -6.0 "static"  0 0 0 0 0 3.2
+  make-pad  7 "vehicle" -1.7  -10.5 "line"    0.7 75  2.2 0 0 0
+  make-pad  8 "roof"    -6.8  -13.0 "static"  0 0 0 0 0 5.0
+  make-pad  9 "roof"     7.0  -18.5 "static"  0 0 0 0 0 7.5
+  make-pad 10 "ground"   1.8  -20.0 "static"  0 0 0 0 0 0
+end
+
+to make-pad [i kind hx hy m s h hs r w height]
+  create-pads 1 [
+    set pad-id i
+    set pad-kind kind
+    set home-x hx   set home-y hy
+    set mot m       set spd s   set hdg deg2rad h   set halfspan hs
+    set rad r       set om w
+    ;; a vehicle deck stands above the road; a roof stands at "height"
+    ifelse kind = "vehicle" [ set deck height + 0.34 ] [ set deck height + 0.022 ]
+    set px hx   set py hy   set pvx 0   set pvy 0
+    setxy hx hy
+    set shape "square"
+    set size ifelse-value (kind = "vehicle") [ 1.8 ] [ 1.5 ]
+    set color ifelse-value (kind = "ground") [ orange ]
+              [ ifelse-value (kind = "vehicle") [ sky ] [ lime ] ]
+    set label (word i)
+    set label-color white
+  ]
+end
+
+to move-pads
+  ask pads [
+    let ox px
+    let oy py
+    if mot = "line" [
+      ;; back and forth along a fixed heading, so the vehicle stops and
+      ;; REVERSES at each end - the case that breaks a naive turn model
+      let s halfspan * (sin-r (spd * sim-t / halfspan))
+      set px home-x + s * (cos-r hdg)
+      set py home-y + s * (sin-r hdg)
+    ]
+    if mot = "circle" [
+      set px home-x + rad * ((cos-r (om * sim-t)) - 1)
+      set py home-y + rad * (sin-r (om * sim-t))
+    ]
+    set pvx (px - ox) / DT
+    set pvy (py - oy) / DT
+    setxy px py
+    if (abs pvx > 0.01) or (abs pvy > 0.01) [ set heading (atan pvx pvy) ]
+  ]
+end
+
+to-report pad-speed-of [p] report sqrt (([pvx] of p) ^ 2 + ([pvy] of p) ^ 2) end
+
+;; =====================================================================
+;;  PERCEPTION - the detector, modelled
+;;
+;;  NetLogo renders no image, so instead of running a real AprilTag
+;;  detector this asks the two questions that decide whether a real one
+;;  would have succeeded, and they are exactly the inequalities the
+;;  Python build asserts in config.check_geometry():
+;;
+;;    1. is the tag big enough in the image?   f * size / range >= 20 px
+;;    2. does it FIT in the frame?             offset + quiet zone
+;;                                             <= (agl - cam drop) * h/2f
+;;
+;;  The second one is the whole reason the decision height exists: a
+;;  downward camera cannot see its own pad to the ground, because the
+;;  marker outgrows the frame. Modelling it is not a shortcut - it is
+;;  the part that matters.
+;; =====================================================================
+
+to-report fov-halfwidth [camera-height]
+  report camera-height * (IMG-H / 2) / FOCAL-PX
+end
+
+;; Height above the deck below which a marker seen from this far
+;; off-centre no longer fits in the frame. The exact inverse of
+;; fov-halfwidth, and the drone's decision height.
+to-report blind-altitude [off]
+  report CAM-DROP + ((TAG-SMALL * QUIET-ZONE / 2) + abs off) / ((IMG-H / 2) / FOCAL-PX)
+end
+
+;; Would a tag of this edge length, whose centre lies this far from the
+;; camera's ground track, decode from this camera height?
+to-report tag-visible? [tag-size off camera-height]
+  if camera-height <= 0.02 [ report false ]
+  let slant sqrt (off * off + camera-height * camera-height)
+  let apparent FOCAL-PX * tag-size / slant
+  if apparent < MIN-TAG-PX [ report false ]
+  report (off + tag-size * QUIET-ZONE / 2) <= (fov-halfwidth camera-height)
+end
+
+to sense
+  set fresh? false
+  set cam-count cam-count + 1
+  if cam-count < CAM-EVERY [
+    set since-vision since-vision + DT
+    dead-reckon
+    stop
+  ]
+  set cam-count 0
+
+  let p pad-with-id target-id
+  let camera-height dr-z - ([deck] of p) - CAM-DROP
+  let off-x ([px] of p) - dr-x
+  let off-y ([py] of p) - dr-y
+  let centre-off sqrt (off-x * off-x + off-y * off-y)
+
+  ;; the large marker sits TAG-LARGE-OFFSET from the pad centre, along
+  ;; the pad's own +x axis, so it is a different distance off-axis
+  let pyaw ifelse-value (pad-speed-of p > 0.05)
+             [ atan2-r ([pvy] of p) ([pvx] of p) ] [ 0 ]
+  let lx ([px] of p) + TAG-LARGE-OFFSET * (cos-r pyaw)
+  let ly ([py] of p) + TAG-LARGE-OFFSET * (sin-r pyaw)
+  let large-off sqrt ((lx - dr-x) ^ 2 + (ly - dr-y) ^ 2)
+
+  let saw-small? tag-visible? TAG-SMALL centre-off camera-height
+  let saw-large? tag-visible? TAG-LARGE large-off camera-height
+
+  ;; The smaller tag wins whenever it is available: it is closer to the
+  ;; pad centre and its pose is the more accurate one at the altitude
+  ;; where it can be seen at all. This is the base paper's multi-scale
+  ;; selection rule, made explicit.
+  ifelse saw-small? [
+    let slant sqrt (centre-off ^ 2 + camera-height ^ 2)
+    let sg VIS-SIGMA-A + VIS-SIGMA-B * slant
+    set held-x off-x + random-normal 0 sg
+    set held-y off-y + random-normal 0 sg
+    set have-held? true
+    set since-vision 0
+    set fresh? true
+    set marker-text "0.12 m marker"
+    if not switched? [ set switched? true ]
+  ] [
+    ifelse saw-large? [
+      let slant sqrt (large-off ^ 2 + camera-height ^ 2)
+      let sg VIS-SIGMA-A + VIS-SIGMA-B * slant
+      ;; the large tag gives the position of the TAG, not of the pad; the
+      ;; correction is its known offset, rotated by the measured pad
+      ;; heading - and a few degrees of heading noise becomes centimetres
+      ;; of position error through that 0.40 m lever arm, which is what
+      ;; the SLERP filter below is for
+      let tx (lx - dr-x) + random-normal 0 sg
+      let ty (ly - dr-y) + random-normal 0 sg
+      let yaw-meas pyaw + random-normal 0 (deg2rad 2.7)
+      set head-filt q-slerp head-filt (q-from-yaw yaw-meas) 0.35
+      let yf yaw-of head-filt
+      set held-x tx - TAG-LARGE-OFFSET * (cos-r yf)
+      set held-y ty - TAG-LARGE-OFFSET * (sin-r yf)
+      set have-held? true
+      set since-vision 0
+      set fresh? true
+      set marker-text "0.42 m marker"
+    ] [
+      set since-vision since-vision + DT
+      dead-reckon
+      set marker-text ifelse-value (mission-state = "FINAL")
+        [ "committed - marker wider than frame" ] [ "NO LOCK" ]
+    ]
+  ]
+
+  ;; the radio fix keeps arriving whether or not the camera sees anything
+  set beacon-clock beacon-clock + DT * CAM-EVERY
+  if beacon-clock >= 0.5 [
+    set beacon-clock 0
+    if centre-off < BEACON-RANGE [
+      set last-fix-x ([px] of p) + random-normal 0 BEACON-SIGMA
+      set last-fix-y ([py] of p) + random-normal 0 BEACON-SIGMA
+      set have-fix? true
+    ]
+  ]
+
+  if fresh? [
+    track-observe (dr-x + held-x) (dr-y + held-y)
+    set last-fix-x dr-x + held-x
+    set last-fix-y dr-y + held-y
+    set have-fix? true
+  ]
+end
+
+;; Yaw of a yaw-only quaternion, in radians.
+to-report yaw-of [q]
+  report 2 * (atan2-r (item 3 q) (item 0 q))
+end
+
+;; While a detection is missing, the last measured offset is propagated
+;; using the estimated pad velocity and the drone's own velocity, so a
+;; one-frame dropout does not reset the loop.
+to dead-reckon
+  if have-held? [
+    set held-x held-x + (tv-x - dr-vx) * DT
+    set held-y held-y + (tv-y - dr-vy) * DT
+  ]
+end
+
+to-report pad-with-id [i] report one-of pads with [pad-id = i] end

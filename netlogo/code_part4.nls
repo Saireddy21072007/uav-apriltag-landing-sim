@@ -1,0 +1,376 @@
+;; =====================================================================
+;;  THE MISSION
+;;
+;;    TAKEOFF   climb to search altitude
+;;    TRANSIT   fly to the addressed pad's radio fix      (radio guidance)
+;;    SEARCH    expanding spiral when the fix was stale    (radio guidance)
+;;    ALIGN     hold altitude, drive the vision offset to zero  (vision)
+;;    DESCEND   descend only while inside the approach cone
+;;    FINAL     committed descent, motors cut on contact
+;;    LANDED / ABORTED
+;;
+;;  Guidance authority passes from radio to vision exactly once, at the
+;;  moment the addressed pad's marker first decodes. The drone will not
+;;  accept any other pad's marker: the ten pads carry ten different ids.
+;; =====================================================================
+
+;; NetLogo runs this by itself when the model is opened, so the world is
+;; already built before anyone presses anything.
+to startup
+  setup
+end
+
+to setup
+  clear-all
+  setup-constants
+  if fixed-seed? [ random-seed seed ]
+  draw-street
+  make-pads
+  draw-buildings
+  setup-camera-panel
+  setup-camera-caption
+  create-uavs 1 [
+    set shape "default"
+    set color white
+    set size 2.2
+  ]
+  create-fovs 1 [
+    set shape "circle 2"
+    set color grey
+    set size 1
+  ]
+  set sim-t 0
+  set wind-x WIND-MEAN-X
+  set wind-y WIND-MEAN-Y
+  set dr-x 0   set dr-y 14.5   set dr-z 0.28
+  set dr-vx 0  set dr-vy 0     set dr-vz 0
+  set dr-q q-identity
+  set dr-wx 0  set dr-wy 0     set dr-wz 0
+  set dr-thrust HOVER-THRUST
+  set yaw-des 0
+  set head-filt q-identity
+  set result-text "-"
+  set target-id 0
+  set mission-state "IDLE"
+  reset-ticks
+  fly-to start-address
+  refresh-display
+end
+
+;; The street, drawn once. Roadway, kerbs, and a block under every pad
+;; that sits on a roof - the building is generated FROM the address
+;; book's height, so the scene and the mission can never disagree about
+;; how high a roof is.
+to draw-street
+  ;; the street only - the right-hand strip belongs to the camera panel
+  ask patches with [pxcor < CAM-X0 - 1] [
+    set pcolor ifelse-value (abs pxcor <= 3) [ 36 ] [ 56 ]
+  ]
+  ask patches with [abs pxcor = 3] [ set pcolor 35 ]
+end
+
+to draw-buildings
+  ask pads with [pad-kind = "roof"] [
+    ask patches in-radius 2.2 [ set pcolor 4 ]
+  ]
+end
+
+;; ---------------------------------------------------------------------
+;;  Retasking. Deliberately does NOT reset the world: the vehicles keep
+;;  driving and the drone keeps its position and velocity, so pressing a
+;;  number mid-flight is a DIVERT, not a restart. Three defects lived
+;;  only on this path in the Python build and none were visible to a
+;;  batch evaluation that flies every mission from a fresh reset.
+;; ---------------------------------------------------------------------
+to fly-to [i]
+  ;; Pressing an address before SETUP is the natural thing to try, and
+  ;; it used to fail with "OF expected ... but got NOBODY" because there
+  ;; were no pads yet. Build the world first instead of complaining.
+  if not any? pads [ setup ]
+  set target-id i
+  set armed? true                    ;; a divert after touchdown must re-arm
+  set mission-state "TAKEOFF"
+  set mission-t 0                    ;; ...and time out on ITS OWN clock
+  set go-arounds 0
+  set aligned-for 0
+  set since-vision 99
+  set have-held? false
+  set switched? false
+  set have-fix? false
+  set search-t 0
+  set result-text "-"
+  set head-filt q-identity
+  reset-pid
+  track-reset
+  set vi-x 0   set vi-y 0
+  set vsp-x 0  set vsp-y 0  set vsp-z 0
+  set vspf-x 0 set vspf-y 0 set vspf-z 0
+  ;; Search altitude is relative to the surface the pad sits on. A pad on
+  ;; a fifth-floor roof is approached from a height above THAT roof.
+  set cruise-target ([deck] of (pad-with-id i)) + CRUISE-ALT
+end
+
+to fly-to-1 fly-to 1 end
+to fly-to-2 fly-to 2 end
+to fly-to-3 fly-to 3 end
+to fly-to-4 fly-to 4 end
+to fly-to-5 fly-to 5 end
+to fly-to-6 fly-to 6 end
+to fly-to-7 fly-to 7 end
+to fly-to-8 fly-to 8 end
+to fly-to-9 fly-to 9 end
+to fly-to-10 fly-to 10 end
+
+;; ---------------------------------------------------------------------
+;;  One control step
+;; ---------------------------------------------------------------------
+to go
+  set sim-t sim-t + DT
+  set mission-t mission-t + DT
+  move-pads
+  track-predict
+  sense
+  fly-state-machine
+  smooth-setpoint
+  inner-loop
+  refresh-display
+  ;; the panel is a display, not part of the control loop - rendering it
+  ;; every fourth step keeps the view smooth without doing 256 ray casts
+  ;; fifty times a second
+  if (ticks mod 4) = 0 [ render-camera  update-camera-caption ]
+  tick
+end
+
+;; A low-pass on the velocity setpoint. The guidance output carries
+;; vision noise, and an unfiltered setpoint makes the airframe chatter
+;; several degrees - which shakes the camera that produced the noise.
+to smooth-setpoint
+  let a DT / (VSP-FILT-TAU + DT)
+  set vspf-x vspf-x + a * (vsp-x - vspf-x)
+  set vspf-y vspf-y + a * (vsp-y - vspf-y)
+  set vspf-z vspf-z + a * (vsp-z - vspf-z)
+end
+
+to-report have-vision? report (since-vision < LOST-TIMEOUT) and have-held? end
+to-report live-vision? report since-vision < 1.5 * DT * CAM-EVERY end
+
+;; Every climb in this state machine goes through here. The search
+;; altitude is already the height at which the large marker decodes, so
+;; climbing past it buys nothing - and an uncapped recovery climb
+;; ratchets the drone upwards a little on every attempt.
+to-report climb-back [rate]
+  report min (list rate (1.1 * (cruise-target - dr-z)))
+end
+
+to fly-state-machine
+  let p pad-with-id target-id
+  let deck-h [deck] of p
+  let agl dr-z - deck-h
+  let ox ifelse-value have-held? [ held-x ] [ 0 ]
+  let oy ifelse-value have-held? [ held-y ] [ 0 ]
+  let err sqrt (ox * ox + oy * oy)
+  set meas-off err
+  set true-off sqrt ((([px] of p) - dr-x) ^ 2 + (([py] of p) - dr-y) ^ 2)
+  set vsp-x 0   set vsp-y 0   set vsp-z 0
+
+  if mission-state = "TAKEOFF" [
+    set vsp-z clamp (1.1 * (cruise-target - dr-z)) (0 - V-MAX-VERT) V-MAX-VERT
+    if dr-z > cruise-target - 0.4 [ set mission-state "TRANSIT" ]
+  ]
+
+  if mission-state = "TRANSIT" [
+    set vsp-z clamp (1.1 * (cruise-target - dr-z)) (0 - V-MAX-VERT) V-MAX-VERT
+    ifelse live-vision? [
+      track-reset
+      track-observe (dr-x + ox) (dr-y + oy)
+      reset-pid
+      set mission-state "ALIGN"
+    ] [
+      if have-fix? [
+        let ex last-fix-x - dr-x
+        let ey last-fix-y - dr-y
+        let cx 0.8 * ex
+        let cy 0.8 * ey
+        let n sqrt (cx * cx + cy * cy)
+        if n > V-MAX-CRUISE [ set cx cx * V-MAX-CRUISE / n   set cy cy * V-MAX-CRUISE / n ]
+        set vsp-x cx   set vsp-y cy
+        if sqrt (ex * ex + ey * ey) < 1.2 [
+          set search-t 0
+          set mission-state "SEARCH" ]
+      ]
+    ]
+  ]
+
+  if mission-state = "SEARCH" [
+    set vsp-z clamp (1.1 * (cruise-target - dr-z)) (0 - V-MAX-VERT) V-MAX-VERT
+    set search-t search-t + DT
+    ifelse live-vision? [
+      track-reset
+      track-observe (dr-x + ox) (dr-y + oy)
+      reset-pid
+      set mission-state "ALIGN"
+    ] [
+      let r 0.5 + 0.30 * search-t
+      let wx last-fix-x + r * (cos-r (0.8 * search-t))
+      let wy last-fix-y + r * (sin-r (0.8 * search-t))
+      set vsp-x clamp (1.1 * (wx - dr-x)) (0 - 2.5) 2.5
+      set vsp-y clamp (1.1 * (wy - dr-y)) (0 - 2.5) 2.5
+      if search-t > 30 [ set mission-state "TRANSIT" ]
+    ]
+  ]
+
+  if mission-state = "ALIGN" [
+    set vsp-z clamp (1.1 * (cruise-target - dr-z)) (0 - V-MAX-VERT) V-MAX-VERT
+    ifelse not have-vision? [
+      set mission-state "TRANSIT"
+    ] [
+      set-track-setpoint ox oy agl
+      ifelse err < ALIGN-TOL [ set aligned-for aligned-for + DT ] [ set aligned-for 0 ]
+      if aligned-for > ALIGN-HOLD [ set mission-state "DESCEND" ]
+    ]
+  ]
+
+  if mission-state = "DESCEND" [
+    let tol commit-tolerance (pad-speed-of p)
+    ;; DECISION HEIGHT. blind-altitude(err) is the height at which a
+    ;; marker seen from this far off-centre stops fitting in the frame.
+    ;; Below it the camera has nothing left to give, so the drone lands
+    ;; on the solution it already holds. The trigger is the marker
+    ;; ACTUALLY going away, held for a few frames - never a prediction
+    ;; that it is about to. The geometry only answers the second
+    ;; question: was this loss expected here?
+    let lost-low? (since-vision > COMMIT-HOLD) and
+                  (agl <= blind-altitude err) and have-held?
+    ifelse lost-low? [
+      set mission-state "FINAL"
+    ] [
+      ifelse not have-vision? [
+        ;; losing the marker higher up is a real re-acquire, but it must
+        ;; not be unbounded: an endless circuit is not a safety feature
+        set go-arounds go-arounds + 1
+        ifelse (go-arounds > MAX-GO-AROUNDS) and (agl < 1.0) and have-held? [
+          set mission-state "FINAL"
+        ] [
+          set vsp-z climb-back 0.6
+          set mission-state "ALIGN"
+        ]
+      ] [
+        set-track-setpoint ox oy agl
+        let allowed max (list tol (CONE-SLOPE * agl))
+        ifelse not live-vision? [
+          set vsp-z 0                            ;; never descend blind
+        ] [
+          ifelse err > DESCEND-ABORT [
+            set vsp-z climb-back 0.5
+          ] [
+            ifelse err > allowed [
+              set vsp-z 0                        ;; outside the cone: hold
+            ] [
+              let q max (list 0 (1 - err / allowed))
+              set vsp-z 0 - (clamp (0.25 + 0.75 * q) 0 V-MAX-VERT)
+              if agl < 1.2 [ set vsp-z max (list vsp-z (0 - 0.45)) ]
+            ]
+          ]
+        ]
+        if live-vision? and agl < FINAL-ALT and err < tol [
+          set mission-state "FINAL" ]
+      ]
+    ]
+  ]
+
+  if mission-state = "FINAL" [
+    set-track-setpoint ox oy agl
+    set vsp-z 0 - FINAL-SINK
+    ;; a go-around is only meaningful while the marker is still usable,
+    ;; and only while the drone has any left to spend
+    if (agl > blind-altitude err) and (go-arounds <= MAX-GO-AROUNDS) and
+       (err > 3 * (commit-tolerance (pad-speed-of p))) [
+      set mission-state "DESCEND" ]
+    if (abs (agl - 0.21) < 0.09) and (abs dr-vz < 0.25) [
+      set armed? false
+      set mission-state "LANDED"
+      set result-text (word "LANDED  " (precision (100 * true-off) 1)
+                            " cm  in " (precision mission-t 1) " s")
+    ]
+  ]
+
+  if (mission-state != "LANDED") and (mission-state != "ABORTED")
+     and (mission-t > MAX-MISSION-TIME) [
+    set mission-state "ABORTED"
+    set result-text (word "ABORTED after " (precision mission-t 0) " s")
+  ]
+
+  if mission-state = "LANDED" or mission-state = "ABORTED" [
+    set vsp-x 0   set vsp-y 0   set vsp-z 0
+  ]
+end
+
+;; ---------------------------------------------------------------------
+;;  Display
+;; ---------------------------------------------------------------------
+to refresh-display
+  let bz q-body-z dr-q
+  set tilt-deg rad2deg (acos-r (item 2 bz))
+  let p pad-with-id target-id
+  let camera-height dr-z - ([deck] of p) - CAM-DROP
+  set fov-half fov-halfwidth (max (list camera-height 0))
+
+  ask uavs [
+    setxy dr-x dr-y
+    ;; size carries the altitude: the drone looks bigger when it is high,
+    ;; the way it would in a top-down view
+    set size 1.2 + 0.16 * dr-z
+    set label (word (precision dr-z 1) " m")
+    set label-color white
+  ]
+  ;; The camera footprint, to scale. Watching this circle shrink below
+  ;; the marker is the decision height, visible.
+  ask fovs [
+    setxy dr-x dr-y
+    set size max (list 0.2 (2 * fov-half))
+    set color ifelse-value live-vision? [ green ] [ red ]
+  ]
+  ask pads [
+    set color ifelse-value (pad-id = target-id) [ yellow ]
+      [ ifelse-value (pad-kind = "ground") [ orange ]
+        [ ifelse-value (pad-kind = "vehicle") [ sky ] [ lime ] ] ]
+  ]
+end
+
+;; ---------------------------------------------------------------------
+;;  Interface reporters
+;; ---------------------------------------------------------------------
+to-report state-text report mission-state end
+to-report address-text
+  if target-id = 0 [ report "-" ]
+  report (word target-id "  " (address-name target-id))
+end
+to-report address-name [i]
+  if i = 1 [ report "A-01 Street drop point" ]
+  if i = 2 [ report "A-02 Loading bay" ]
+  if i = 3 [ report "B-03 Courier van" ]
+  if i = 4 [ report "B-04 Clinic entrance" ]
+  if i = 5 [ report "C-05 Service rover" ]
+  if i = 6 [ report "C-06 Apartment roof, 2F" ]
+  if i = 7 [ report "D-07 Utility cart" ]
+  if i = 8 [ report "D-08 Apartment roof, 3F" ]
+  if i = 9 [ report "E-09 Tower roof, 5F" ]
+  report "E-10 Kerbside locker"
+end
+to-report altitude-m report precision dr-z 2 end
+to-report agl-m
+  if target-id = 0 [ report 0 ]
+  report precision (dr-z - ([deck] of (pad-with-id target-id))) 2
+end
+to-report offset-m report precision meas-off 3 end
+to-report true-offset-cm report precision (100 * true-off) 1 end
+to-report tilt-d report precision tilt-deg 1 end
+to-report lock-text report marker-text end
+to-report decision-height-m
+  report precision (blind-altitude meas-off) 3
+end
+to-report mission-time report precision mission-t 1 end
+to-report pad-speed-now
+  if target-id = 0 [ report 0 ]
+  report precision (pad-speed-of (pad-with-id target-id)) 2
+end

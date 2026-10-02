@@ -1,0 +1,337 @@
+;; =====================================================================
+;;  TARGET TRACKER
+;;  Alpha-beta-gamma (constant acceleration) with a COORDINATED-TURN
+;;  prediction. Predicts every control step, corrects only on frames that
+;;  actually decoded - re-feeding a held measurement at the control rate
+;;  would drag the velocity estimate towards zero.
+;; =====================================================================
+
+to track-reset
+  set have-track? false
+  set tp-x 0   set tp-y 0
+  set tv-x 0   set tv-y 0
+  set ta-x 0   set ta-y 0
+  set turn-w 0
+  set t-since 0
+end
+
+;; Turn rate implied by the velocity and acceleration already estimated.
+;; For ANY planar motion the part of the acceleration perpendicular to
+;; the velocity IS the turn:   omega = (v x a)_z / |v|^2
+;; so no new measurement is needed. But it is believed only when the
+;; acceleration really is perpendicular: |sin| of the angle between them
+;; is 1 for a pad driving a steady circle and 0 for one braking in a
+;; straight line. Without that deadband the model is actively harmful on
+;; the pads that shuttle back and forth - at each end the vehicle stops
+;; and reverses, |v| passes through zero, and a cross product divided by
+;; |v|^2 reports a violent corner where there is only a straight stop.
+to-report turn-rate
+  let s2 tv-x * tv-x + tv-y * tv-y
+  if s2 < OMEGA-MIN-SPEED * OMEGA-MIN-SPEED [ report 0 ]
+  let cross tv-x * ta-y - tv-y * ta-x
+  let a-mag sqrt (ta-x * ta-x + ta-y * ta-y)
+  if a-mag < 1.0e-6 [ report 0 ]
+  let perp (abs cross) / ((sqrt s2) * a-mag)
+  if perp < OMEGA-PERP-MIN [ report 0 ]
+  let ramp (perp - OMEGA-PERP-MIN) / (1 - OMEGA-PERP-MIN)
+  if ramp > 1 [ set ramp 1 ]
+  report clamp (cross / s2 * ramp) (0 - OMEGA-MAX) OMEGA-MAX
+end
+
+to track-predict
+  if have-track? [
+    ifelse tracker-coordinated-turn? [
+      set turn-w turn-w + (DT / (OMEGA-TAU + DT)) * ((turn-rate) - turn-w)
+      let ang turn-w * DT
+      ifelse abs ang < 1.0e-4 [
+        set tp-x tp-x + tv-x * DT + 0.5 * ta-x * DT * DT
+        set tp-y tp-y + tv-y * DT + 0.5 * ta-y * DT * DT
+        set tv-x tv-x + ta-x * DT
+        set tv-y tv-y + ta-y * DT
+      ] [
+        ;; Exact integral of a velocity that rotates at omega: the target
+        ;; travels along the ARC, not along the tangent. A constant-
+        ;; acceleration model can only extrapolate a straight line plus a
+        ;; fixed bend, and a pad driving a steady circle curves away from
+        ;; that continuously.
+        let c cos-r ang
+        let s sin-r ang
+        set tp-x tp-x + (s * tv-x - (1 - c) * tv-y) / turn-w
+        set tp-y tp-y + ((1 - c) * tv-x + s * tv-y) / turn-w
+        let nvx c * tv-x - s * tv-y
+        let nvy s * tv-x + c * tv-y
+        set tv-x nvx   set tv-y nvy
+        let nax c * ta-x - s * ta-y
+        let nay s * ta-x + c * ta-y
+        set ta-x nax   set ta-y nay
+      ]
+    ] [
+      set tp-x tp-x + tv-x * DT + 0.5 * ta-x * DT * DT
+      set tp-y tp-y + tv-y * DT + 0.5 * ta-y * DT * DT
+      set tv-x tv-x + ta-x * DT
+      set tv-y tv-y + ta-y * DT
+    ]
+  ]
+  set t-since t-since + DT
+end
+
+to track-observe [mx my]
+  ifelse not have-track? [
+    set tp-x mx   set tp-y my
+    set tv-x 0    set tv-y 0
+    set ta-x 0    set ta-y 0
+    set turn-w 0
+    set have-track? true
+  ] [
+    let dt2 max (list t-since 0.001)
+    let rx mx - tp-x
+    let ry my - tp-y
+    set tp-x tp-x + AB-ALPHA * rx
+    set tp-y tp-y + AB-ALPHA * ry
+    set tv-x clamp (tv-x + (AB-BETA / dt2) * rx) (0 - 4) 4
+    set tv-y clamp (tv-y + (AB-BETA / dt2) * ry) (0 - 4) 4
+    let anx ta-x + (2 * AB-GAMMA / (dt2 * dt2)) * rx
+    let a-new-y ta-y + (2 * AB-GAMMA / (dt2 * dt2)) * ry
+    set ta-x clamp (0.75 * ta-x + 0.25 * anx) (0 - 2.5) 2.5
+    set ta-y clamp (0.75 * ta-y + 0.25 * a-new-y) (0 - 2.5) 2.5
+  ]
+  set t-since 0
+end
+
+;; Velocity to feed forward. On a turn the lead is a ROTATION of the
+;; velocity, not an addition to it - adding acceleration for a quarter of
+;; a second points the drone at the tangent, off the outside of the corner.
+to-report lead-vx
+  if tracker-coordinated-turn? and abs turn-w > 1.0e-4 [
+    report (cos-r (turn-w * LEAD-TIME)) * tv-x - (sin-r (turn-w * LEAD-TIME)) * tv-y ]
+  report tv-x + ta-x * LEAD-TIME
+end
+
+to-report lead-vy
+  if tracker-coordinated-turn? and abs turn-w > 1.0e-4 [
+    report (sin-r (turn-w * LEAD-TIME)) * tv-x + (cos-r (turn-w * LEAD-TIME)) * tv-y ]
+  report tv-y + ta-y * LEAD-TIME
+end
+
+;; =====================================================================
+;;  GUIDANCE - eq. (9) of the base paper, at its published gains, with
+;;  five changes. Each is switchable from the interface so the ablation
+;;  can show what it buys.
+;;
+;;    V = kp*err + ki*integral + kd*(err - last_err)
+;; =====================================================================
+
+to-report altitude-gain [agl]
+  if not gain-schedule? [ report 1 ]
+  if agl >= GAIN-HI-ALT [ report 1 ]
+  if agl <= GAIN-LO-ALT [ report GAIN-LOW ]
+  let f (GAIN-HI-ALT - agl) / (GAIN-HI-ALT - GAIN-LO-ALT)
+  report 1 + f * (GAIN-LOW - 1)
+end
+
+to reset-pid
+  set int-x 0   set int-y 0
+  set last-err-x 0   set last-err-y 0
+  set d-state-x 0    set d-state-y 0
+  set pid-started? false
+end
+
+;; One PID axis. Returns the velocity command for that axis.
+to-report pid-step [err which g]
+  let integral ifelse-value (which = 0) [ int-x ] [ int-y ]
+  let last-e   ifelse-value (which = 0) [ last-err-x ] [ last-err-y ]
+  let dstate   ifelse-value (which = 0) [ d-state-x ] [ d-state-y ]
+  if not pid-started? [ set last-e err ]
+
+  ;; CONDITIONAL INTEGRATION: the integral exists to trim a steady wind
+  ;; while the drone holds station over the pad. Allowed to charge during
+  ;; a twenty-metre transit it only buys overshoot.
+  if abs err < I-BAND [
+    set integral clamp (integral + err * DT) (0 - I-CLAMP) I-CLAMP ]
+
+  ;; ...WITH A LEAK. A charge built up while closing in from one side is
+  ;; history, not trim. Left to unwind on its own it is the largest term
+  ;; in the loop: the drone hovers over the pad, measures its ten
+  ;; centimetre offset correctly, and flies the other way. On stationary
+  ;; addresses this single rule is worth 12.5 cm -> 1.9 cm.
+  if anti-windup? and integral * err < 0 [
+    set integral integral * (max (list 0 (1 - DT / I-LEAK-TAU))) ]
+
+  ;; RATE-NORMALISED, FILTERED DERIVATIVE. As printed the derivative has
+  ;; no division by the sample period, so the same kd behaves completely
+  ;; differently at every loop rate; low-pass filtered so that
+  ;; centimetre-level vision noise is not differentiated into metres per
+  ;; second of command.
+  let raw (err - last-e) / (max (list DT 1.0e-6))
+  let a DT / (D-FILT-TAU + DT)
+  set dstate dstate + a * (raw - dstate)
+
+  ifelse which = 0
+    [ set int-x integral   set last-err-x err   set d-state-x dstate ]
+    [ set int-y integral   set last-err-y err   set d-state-y dstate ]
+
+  ;; The altitude schedule speeds up the RESPONSE as the camera's view of
+  ;; the ground shrinks. It has no business rescaling the accumulated
+  ;; trim, which is an estimate of a standing disturbance and is already
+  ;; in the right units.
+  ifelse anti-windup?
+    [ report g * (KP * err + KD * dstate) + KI * integral ]
+    [ report g * (KP * err + KI * integral + KD * dstate) ]
+end
+
+to-report guidance-vx [ox oy agl]
+  let g altitude-gain agl
+  let v pid-step ox 0 g
+  if feed-forward? [ set v v + lead-vx ]
+  report v
+end
+
+to-report guidance-vy [ox oy agl]
+  let g altitude-gain agl
+  let v pid-step oy 1 g
+  if feed-forward? [ set v v + lead-vy ]
+  set pid-started? true
+  report v
+end
+
+;; Apply the shared speed cap to a velocity pair.
+to set-track-setpoint [ox oy agl]
+  let cx guidance-vx ox oy agl
+  let cy guidance-vy ox oy agl
+  let n sqrt (cx * cx + cy * cy)
+  if n > V-MAX-TRACK [ set cx cx * V-MAX-TRACK / n   set cy cy * V-MAX-TRACK / n ]
+  set vsp-x cx
+  set vsp-y cy
+end
+
+;; =====================================================================
+;;  INNER LOOP - velocity setpoint to thrust and torque, through a
+;;  desired ORIENTATION that is built, never decomposed.
+;; =====================================================================
+
+to inner-loop
+  ;; ---- velocity loop, with a small integral term.
+  ;; A purely proportional velocity loop cannot hold station in a steady
+  ;; wind: holding against drag needs a standing lean, and the only way a
+  ;; P loop produces one is by keeping a standing velocity error of
+  ;; F_drag / (kp_vel * m) - about 3.6 cm/s here, the same order as the
+  ;; correction the vision loop is asking for at touchdown height.
+  let evx vspf-x - dr-vx
+  let evy vspf-y - dr-vy
+  let ax KP-VEL * evx + KI-VEL * vi-x
+  let ay KP-VEL * evy + KI-VEL * vi-y
+  let az KP-VZ * (vspf-z - dr-vz)
+
+  let a-lat sqrt (ax * ax + ay * ay)
+  let a-max GRAV * (tan (rad2deg MAX-TILT))
+  ifelse a-lat > a-max [
+    set ax ax * a-max / a-lat
+    set ay ay * a-max / a-lat
+  ] [
+    ;; integrate only where there is authority left to use it, so a
+    ;; saturated manoeuvre cannot wind the trim up behind the limiter
+    set vi-x clamp (vi-x + evx * DT) (0 - VI-CLAMP) VI-CLAMP
+    set vi-y clamp (vi-y + evy * DT) (0 - VI-CLAMP) VI-CLAMP
+  ]
+  set az clamp az (0 - 4) 6
+
+  ;; ---- desired force, and the orientation that produces it
+  let fx MASS * ax
+  let fy MASS * ay
+  let fz MASS * (az + GRAV)
+  if fz < 0.25 * HOVER-THRUST [ set fz 0.25 * HOVER-THRUST ]
+  let lean sqrt (fx * fx + fy * fy)
+  let max-lean fz * (tan (rad2deg MAX-TILT))
+  if lean > max-lean and max-lean > 0 [
+    set fx fx * max-lean / lean
+    set fy fy * max-lean / lean
+  ]
+  let f (list fx fy fz)
+
+  ;; A quadrotor can only push along its own +z, so the desired body z
+  ;; axis IS the force direction. Three cross products and a normalise -
+  ;; no trigonometry, and nothing singular.
+  let b3 v-unit f
+  let c1 (list (cos-r yaw-des) (sin-r yaw-des) 0)
+  let b2 v-unit (v-cross b3 c1)
+  let b1 v-cross b2 b3
+  let q-des axes-to-q b1 b2 b3
+
+  ;; ---- attitude error IS a rotation:  q_err = q^-1 * q_des
+  let q-err q-mul (q-conj dr-q) q-des
+  let erot q-to-rotvec q-err
+  ;; proportional on the rotation vector, plus rate damping. A complete
+  ;; attitude loop, valid at any attitude, with no small-angle assumption.
+  let alpha-x 10 * (KP-ATT * (item 0 erot) - KD-RATE * dr-wx)
+  let alpha-y 10 * (KP-ATT * (item 1 erot) - KD-RATE * dr-wy)
+  let alpha-z 10 * (KP-YAW * (item 2 erot) - KD-YAW * dr-wz)
+
+  ;; ---- thrust is the projection of the desired force onto the axis the
+  ;; drone is CURRENTLY pointing along, not the length of the desired
+  ;; force. Sizing it for an orientation the airframe has not reached yet
+  ;; leaves surplus lift, and the drone climbs away from its altitude
+  ;; setpoint whenever it manoeuvres hard.
+  let bz q-body-z dr-q
+  set dr-thrust clamp (v-dot f bz) 0 MAX-THRUST
+
+  integrate alpha-x alpha-y alpha-z
+end
+
+;; =====================================================================
+;;  PHYSICS - rigid body, integrated with the same quaternion state
+;; =====================================================================
+
+to integrate [alpha-x alpha-y alpha-z]
+  if not armed? [ set dr-thrust 0 ]
+
+  ;; body rates, then the quaternion kinematics  q' = 0.5 * q (x) [0, w]
+  set dr-wx dr-wx + alpha-x * DT
+  set dr-wy dr-wy + alpha-y * DT
+  set dr-wz dr-wz + alpha-z * DT
+  let qd q-mul dr-q (list 0 dr-wx dr-wy dr-wz)
+  set dr-q q-normalize ((map [ [a b] -> a + 0.5 * b * DT ] dr-q qd))
+
+  ;; wind: an Ornstein-Uhlenbeck gust about a steady mean
+  set wind-x wind-x + (DT / WIND-TAU) * (WIND-MEAN-X - wind-x) +
+             WIND-SIGMA * sqrt (2 * DT / WIND-TAU) * random-normal 0 1
+  set wind-y wind-y + (DT / WIND-TAU) * (WIND-MEAN-Y - wind-y) +
+             WIND-SIGMA * sqrt (2 * DT / WIND-TAU) * random-normal 0 1
+  let wx-eff ifelse-value wind? [ wind-x ] [ 0 ]
+  let wy-eff ifelse-value wind? [ wind-y ] [ 0 ]
+
+  let bz q-body-z dr-q
+  let ax (dr-thrust / MASS) * (item 0 bz) + DRAG-COEF * (wx-eff - dr-vx) / MASS
+  let ay (dr-thrust / MASS) * (item 1 bz) + DRAG-COEF * (wy-eff - dr-vy) / MASS
+  let az (dr-thrust / MASS) * (item 2 bz) - GRAV - DRAG-COEF * dr-vz / MASS
+
+  set dr-vx dr-vx + ax * DT
+  set dr-vy dr-vy + ay * DT
+  set dr-vz dr-vz + az * DT
+  set dr-x dr-x + dr-vx * DT
+  set dr-y dr-y + dr-vy * DT
+  set dr-z dr-z + dr-vz * DT
+
+  ;; contact with whatever surface is underneath
+  let floor-h surface-under dr-x dr-y
+  if dr-z <= floor-h + 0.21 [
+    set dr-z floor-h + 0.21
+    if dr-vz < 0 [ set dr-vz 0 ]
+    set dr-vx dr-vx * 0.5
+    set dr-vy dr-vy * 0.5
+  ]
+end
+
+;; Height of the surface beneath a point: a roof if we are over one,
+;; a vehicle deck if we are over one, otherwise the road.
+to-report surface-under [x y]
+  let h 0
+  ask pads [
+    if pad-kind = "roof" [
+      if (abs (x - px) < 2.2) and (abs (y - py) < 2.2) [
+        if deck > h [ set h deck ] ] ]
+    if pad-kind = "vehicle" [
+      if (abs (x - px) < 0.75) and (abs (y - py) < 0.75) [
+        if deck > h [ set h deck ] ] ]
+  ]
+  report h
+end
