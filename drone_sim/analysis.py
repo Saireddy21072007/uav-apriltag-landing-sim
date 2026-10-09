@@ -265,12 +265,4 @@ def slerp_demo():
     this, and a plain lerp on Euler angles has the same defect at the wrap.""")
 
 
-if __name__ == "__main__":
-    print("=" * 72)
-    print("  System analysis - computed from the flight constants in config.py")
-    print("=" * 72)
-    controllability()
-    observability()
-    lerp_in_this_project()
-    slerp_demo()
-    print()
+
