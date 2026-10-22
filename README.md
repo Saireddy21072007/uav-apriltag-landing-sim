@@ -4,9 +4,6 @@
 ![mujoco](https://img.shields.io/badge/physics-MuJoCo-0b7dda)
 ![opencv](https://img.shields.io/badge/vision-OpenCV%20%2B%20AprilTag-5c3ee8)
 
-A MuJoCo quadrotor that flies to a numbered address, finds the right landing pad
-with its own downward camera, tracks it while it moves, and lands on it. Ten pads:
-on the street, on three moving vehicles, and on apartment roofs.
 
 Nothing in the perception path is faked: frames are rendered from the drone's
 camera, real `tag36h11` AprilTags are decoded with `pupil_apriltags`, and pose
