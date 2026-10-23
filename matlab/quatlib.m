@@ -1,7 +1,25 @@
 classdef quatlib
 %QUATLIB  Quaternion algebra for attitude, including SLERP.
 %
-
+%   q = [w x y z], unit norm, rotating BODY vectors into the WORLD frame -
+%   the same convention as the Python/MuJoCo build.
+%
+%   The base paper works in Euler angles: it composes R = Rz(a)Ry(t)Rx(b)
+%   and controls roll, pitch and yaw as three separate numbers. This
+%   implementation uses unit quaternions instead, for three reasons that
+%   matter here:
+%
+%     * No gimbal lock and no wrap. Euler angles are singular at
+%       pitch = 90 deg and discontinuous at +-180 deg of yaw. A vehicle
+%       chasing a pad that drives a circle crosses the yaw wrap on nearly
+%       every lap, and every difference taken across that wrap is wrong by
+%       360 degrees unless it is special-cased.
+%     * The attitude error IS a rotation. The error between where the
+%       drone points and where it should point is itself a rotation, and
+%       the quaternion product gives it directly - no trigonometry and no
+%       small-angle assumption.
+%     * Shortest arc for free. q and -q are the same rotation, so the sign
+%       of one dot product guarantees the controller always turns the
 %       short way round.
 
 methods (Static)
