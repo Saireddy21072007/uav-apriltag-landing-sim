@@ -22,6 +22,7 @@ classdef quatlib
 %       of one dot product guarantees the controller always turns the
 %       short way round.
 
+methods (Static)
 
 
     function q = identity()
