@@ -172,11 +172,6 @@ an **apartment roof**. A roof landing is the same manoeuvre performed higher up 
 the search altitude, the descent gates and the touchdown test are all measured
 relative to the surface the pad sits on, not to the ground.
 
-Each pad carries two AprilTags: a 0.42 m marker with id = the pad number for the
-approach, and a 0.12 m marker with id = pad number + 10 at the pad centre for the
-last two metres. Distinct ids mean the drone can be told *which* pad to land on
-and will ignore the others — at search altitude two or three pads are in frame
-at once, every time.
 
 ## Layout
 
